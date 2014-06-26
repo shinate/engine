@@ -15,6 +15,29 @@ pc.gfx.programlib = {
                 code += '}\n';
                 break;
 
+            case 'common_pack_float':
+                // Packing a float in GLSL with multiplication and mod
+                // http://blog.gradientstudios.com/2012/08/23/shadow-map-improvement
+                code += 'vec4 packFloat(float depth)\n';
+                code += '{\n';
+                code += '    const vec4 bit_shift = vec4(256.0 * 256.0 * 256.0, 256.0 * 256.0, 256.0, 1.0);\n';
+                code += '    const vec4 bit_mask  = vec4(0.0, 1.0 / 256.0, 1.0 / 256.0, 1.0 / 256.0);\n';
+                             // combination of mod and multiplication and division works better
+                code += '    vec4 res = mod(depth * bit_shift * vec4(255), vec4(256) ) / vec4(255);\n';
+                code += '    res -= res.xxyz * bit_mask;\n';
+                code += '    return res;\n';
+                code += '}\n\n';
+                break;
+
+            case 'common_unpack_float':
+                code += 'float unpackFloat(vec4 rgbaDepth)\n';
+                code += '{\n';
+                code += '    const vec4 bitShift = vec4(1.0 / (256.0 * 256.0 * 256.0), 1.0 / (256.0 * 256.0), 1.0 / 256.0, 1.0);\n';
+                code += '    float depth = dot(rgbaDepth, bitShift);\n';
+                code += '    return depth;\n';
+                code += '}\n\n';
+                break;
+
             //////////////////////////////
             // FRAGMENT SHADER SNIPPETS //
             //////////////////////////////
@@ -108,14 +131,14 @@ pc.gfx.programlib = {
                     code += '    vec3 T = dp2perp * duv1.x + dp1perp * duv2.x;\n';
                     code += '    vec3 B = dp2perp * duv1.y + dp1perp * duv2.y;\n\n';
 
-                                 // construct a scale-invariant frame 
+                                 // construct a scale-invariant frame
                     code += '    float invmax = inversesqrt( max( dot(T,T), dot(B,B) ) );\n';
                     code += '    return mat3( T * invmax, B * invmax, N );\n';
                     code += '}\n\n';
 
                     code += 'vec3 perturb_normal( vec3 N, vec3 V, vec2 uv )\n';
                     code += '{\n';
-                                 // assume N, the interpolated vertex normal and 
+                                 // assume N, the interpolated vertex normal and
                                  // V, the view vector (vertex to eye)
                     code += '    vec3 map = texture2D( texture_normalMap, uv ).xyz;\n';
                     code += '    map = map * 255./127. - 128./127.;\n';
@@ -135,6 +158,8 @@ pc.gfx.programlib = {
                 code += 'attribute vec4 vertex_boneWeights;\n';
                 code += 'attribute vec4 vertex_boneIndices;\n';
                 code += 'uniform mat4 matrix_pose[' + numBones + '];\n';
+                code += 'uniform mat4 matrix_view;\n';
+                code += 'uniform mat4 matrix_model;\n';
                 code += 'uniform mat4 matrix_viewProjection;\n\n';
                 break;
 
@@ -171,6 +196,7 @@ pc.gfx.programlib = {
             case 'vs_static_position_decl':
                 code += 'attribute vec3 vertex_position;\n';
                 code += 'uniform mat4 matrix_model;\n';
+                code += 'uniform mat4 matrix_view;\n';
                 code += 'uniform mat4 matrix_viewProjection;\n\n';
                 break;
 

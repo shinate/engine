@@ -34,6 +34,11 @@ pc.gfx.programlib.depth = {
             code += getSnippet(device, 'vs_static_position_decl');
         }
 
+        code += 'varying float depth;\n';
+
+        code += 'uniform float camera_near;\n';
+        code += 'uniform float camera_far;\n';
+
         if (options.opacityMap) {
             code += "attribute vec2 vertex_texCoord0;\n\n";
             code += 'varying vec2 vUv0;\n\n';
@@ -53,8 +58,14 @@ pc.gfx.programlib.depth = {
             code += '    vUv0 = vertex_texCoord0;\n';
         }
 
+        // this will transform the vertex into eyespace
+        code += "vec4 viewPos = matrix_view * positionW;\n";
+
+        // will map near..far to 0..1
+        code += "depth = (-viewPos.z-camera_near)/(camera_far-camera_near);\n";
+
         code += getSnippet(device, 'common_main_end');
-        
+
         var vshader = code;
 
         //////////////////////////////
@@ -62,15 +73,14 @@ pc.gfx.programlib.depth = {
         //////////////////////////////
         code = getSnippet(device, 'fs_precision');
 
-        code += 'uniform float camera_near;\n';
-        code += 'uniform float camera_far;\n';
+        code += 'varying float depth;\n';
+
+        code += getSnippet(device, 'common_pack_float');
 
         // FRAGMENT SHADER BODY
         code += getSnippet(device, 'common_main_begin');
 
-        code += "float depth = gl_FragCoord.z / gl_FragCoord.w;";
-        code += "float color = 1.0 - smoothstep(camera_near, camera_far, depth);";
-        code += "gl_FragColor = vec4(vec3(color), 1.0);";
+        code += "gl_FragColor = packFloat(depth);";
 
         code += getSnippet(device, 'common_main_end');
 

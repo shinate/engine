@@ -172,8 +172,8 @@ pc.gfx.programlib.phong = {
             if (i >= totalDirs + totalPnts) {
                 code += "uniform vec3 light" + i + "_spotDirection;\n";
             }
-            if ((i >= options.numDirs && i < totalDirs) || 
-                (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) || 
+            if ((i >= options.numDirs && i < totalDirs) ||
+                (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) ||
                 (i >= totalDirs + totalPnts + options.numSpts && i < totalLights)) {
                 code += "uniform mat4 light" + i + "_shadowMatrix;\n";
             }
@@ -216,8 +216,8 @@ pc.gfx.programlib.phong = {
                 if (i >= totalDirs + totalPnts) {
                     code += "varying vec3 vLight" + i + "SpotDirW;\n";
                 }
-                if ((i >= options.numDirs && i < totalDirs) || 
-                    (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) || 
+                if ((i >= options.numDirs && i < totalDirs) ||
+                    (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) ||
                     (i >= totalDirs + totalPnts + options.numSpts && i < totalLights)) {
                     code += "varying vec4 vLight" + i + "ShadowCoord;\n";
                 }
@@ -346,8 +346,8 @@ pc.gfx.programlib.phong = {
             }
 
             for (i = 0; i < totalLights; i++) {
-                if ((i >= options.numDirs && i < totalDirs) || 
-                    (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) || 
+                if ((i >= options.numDirs && i < totalDirs) ||
+                    (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) ||
                     (i >= totalDirs + totalPnts + options.numSpts && i < totalLights)) {
                     code += "    vLight" + i + "ShadowCoord = light" + i + "_shadowMatrix * positionW;\n";
                 }
@@ -386,7 +386,7 @@ pc.gfx.programlib.phong = {
             code += "    vUvLightMap = vertex_texCoord1;\n";
         }
         code += "}";
-        
+
         var vshader = code;
 
         //////////////////////////////
@@ -410,8 +410,8 @@ pc.gfx.programlib.phong = {
                 if (i >= totalDirs + totalPnts) {
                     code += "varying vec3 vLight" + i + "SpotDirW;\n";
                 }
-                if ((i >= options.numDirs && i < totalDirs) || 
-                    (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) || 
+                if ((i >= options.numDirs && i < totalDirs) ||
+                    (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) ||
                     (i >= totalDirs + totalPnts + options.numSpts && i < totalLights)) {
                     code += "varying vec4 vLight" + i + "ShadowCoord;\n";
                 }
@@ -510,8 +510,8 @@ pc.gfx.programlib.phong = {
                     code += "uniform float light" + i + "_outerConeAngle;\n";
                 }
             }
-            if ((i >= options.numDirs && i < totalDirs) || 
-                (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) || 
+            if ((i >= options.numDirs && i < totalDirs) ||
+                (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) ||
                 (i >= totalDirs + totalPnts + options.numSpts && i < totalLights)) {
                 code += "uniform vec3 light" + i + "_shadowParams;\n"; // Width, height, bias
                 code += "uniform sampler2D light" + i + "_shadowMap;\n";
@@ -539,12 +539,7 @@ pc.gfx.programlib.phong = {
         code += "\n"; // End of uniform declarations
 
         if (numShadowLights > 0) {
-            code += 'float unpackFloat(vec4 rgbaDepth)\n';
-            code += '{\n';
-            code += '    const vec4 bitShift = vec4(1.0 / (256.0 * 256.0 * 256.0), 1.0 / (256.0 * 256.0), 1.0 / 256.0, 1.0);\n';
-            code += '    float depth = dot(rgbaDepth, bitShift);\n';
-            code += '    return depth;\n';
-            code += '}\n\n';
+            code += getSnippet(device, 'common_unpack_float');
 
             code += "float calculateShadowFactor(const in vec4 sc, const in vec3 sp, const in sampler2D shadowMap)\n";
             code += "{\n";
@@ -669,7 +664,7 @@ pc.gfx.programlib.phong = {
             if (options.specularMap) {
                 if (options.specularMapTransform) {
                     code += "    vec2 uvSpecularMap = vUvSpecularMap;\n";
-                } else { 
+                } else {
                     code += "    vec2 uvSpecularMap = vUv0;\n";
                 }
             }
@@ -677,7 +672,7 @@ pc.gfx.programlib.phong = {
             if (options.glossMap) {
                 if (options.glossMapTransform) {
                     code += "    vec2 uvGlossMap = vUvGlossMap;\n";
-                } else { 
+                } else {
                     code += "    vec2 uvGlossMap = vUv0;\n";
                 }
             }
@@ -804,8 +799,8 @@ pc.gfx.programlib.phong = {
                 var positionalLight = i >= totalDirs;
                 var spotLight = i >= totalDirs + totalPnts;
                 var shadowLight =
-                   ((i >= options.numDirs && i < totalDirs) || 
-                    (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) || 
+                   ((i >= options.numDirs && i < totalDirs) ||
+                    (i >= totalDirs + options.numPnts && i < totalDirs + totalPnts) ||
                     (i >= totalDirs + totalPnts + options.numSpts && i < totalLights));
 
                 code += "    L = normalize(vLight" + i + "DirW);\n";
