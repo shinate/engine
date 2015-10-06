@@ -78,9 +78,27 @@ pc.extend(pc, function () {
             var src = this.dataStore[entity.getGuid()];
             var data = {
                 runInTools: src.data.runInTools,
-                scripts: pc.extend([], src.data.scripts),
+                scripts: [],
                 enabled: src.data.enabled
             };
+
+            // manually clone scripts so that we don't clone attributes with pc.extend
+            // which will result in a stack overflow when extending 'entity' script attributes
+            var scripts = src.data.scripts;
+            for (var i = 0, len = scripts.length; i < len; i++) {
+                var attributes = scripts[i].attributes;
+                if (attributes) {
+                    delete scripts[i].attributes;
+                }
+
+                data.scripts.push(pc.extend({}, scripts[i]));
+
+                if (attributes) {
+                    data.scripts[i].attributes = this._cloneAttributes(attributes);
+                    scripts[i].attributes = attributes;
+                }
+            }
+
             return this.addComponent(clone, data);
         },
 
@@ -236,7 +254,7 @@ pc.extend(pc, function () {
             var item;
             for (var i=0, len=updateList.length; i<len; i++) {
                 item = updateList[i];
-                if (item && item.entity.script.enabled && item.entity.enabled) {
+                if (item && item.entity && item.entity.enabled && item.entity.script.enabled) {
                     item[method].call(item, dt);
                 }
             }
@@ -402,6 +420,30 @@ pc.extend(pc, function () {
             }
         },
 
+        _cloneAttributes: function (attributes) {
+            var result = {};
+
+            for (var key in attributes) {
+                if (!attributes.hasOwnProperty(key))
+                    continue;
+
+                if (attributes[key].type !== 'entity') {
+                    result[key] = pc.extend({}, attributes[key]);
+                } else {
+                    // don't pc.extend an entity
+                    var val = attributes[key].value;
+                    delete attributes[key].value;
+
+                    result[key] = pc.extend({}, attributes[key]);
+                    result[key].value = val;
+
+                    attributes[key].value = val;
+                }
+            }
+
+            return result;
+        },
+
         _createAccessors: function (entity, instance) {
             var self = this;
             var i;
@@ -419,7 +461,7 @@ pc.extend(pc, function () {
                             }
                         }
 
-                        entity.script.data.attributes[script.name] = pc.extend({}, attributes);
+                        entity.script.data.attributes[script.name] = self._cloneAttributes(attributes);
                     }
                     break;
                 }
@@ -428,6 +470,15 @@ pc.extend(pc, function () {
 
         _createAccessor: function (attribute, instance) {
             var self = this;
+
+            // create copy of attribute data
+            // to avoid overwritting the same attribute values
+            // that are used by the Editor
+            attribute = {
+                name: attribute.name,
+                value: attribute.value,
+                type: attribute.type
+            };
 
             self._convertAttributeValue(attribute);
 
@@ -490,7 +541,7 @@ pc.extend(pc, function () {
                         }
 
                         if (attributes) {
-                            scriptComponent.data.attributes[name] = pc.extend([], attributes);
+                            scriptComponent.data.attributes[name] = self._cloneAttributes(attributes);
                         } else {
                             delete scriptComponent.data.attributes[name];
                         }
@@ -512,6 +563,14 @@ pc.extend(pc, function () {
                 if (pc.type(attribute.value) === 'array') {
                     attribute.value = new pc.Vec3(attribute.value[0], attribute.value[1], attribute.value[2]);
                 }
+            } else if (attribute.type === 'entity') {
+                if (attribute.value !== null && typeof attribute.value === 'string') {
+                    attribute.value = this.app.root.findByGuid(attribute.value);
+                }
+            } else if (attribute.type === 'curve' || attribute.type === 'colorcurve') {
+                var curveType = attribute.value.keys[0] instanceof Array ? pc.CurveSet : pc.Curve;
+                attribute.value = new curveType(attribute.value.keys);
+                attribute.value.type = attribute.value.type;
             }
         }
 

@@ -4,10 +4,10 @@ pc.extend(pc, function() {
     var SIMPLE_PROPERTIES = [
         'emitterExtents',
         'emitterRadius',
-        'colorMap',
         'normalMap',
         'loop',
-        'initialVelocity'
+        'initialVelocity',
+        'animSpeed'
     ];
 
     // properties that need rebuilding the particle system
@@ -24,12 +24,16 @@ pc.extend(pc, function() {
         'wrap',
         'wrapBounds',
         'depthWrite',
-        'depthSoftening',
         'sort',
         'stretch',
         'alignToMotion',
         'preWarm',
-        'emitterShape'
+        'emitterShape',
+        'animTilesX',
+        'animTilesY',
+        'animFrames',
+        'animLoop',
+        'colorMap'
     ];
 
     var GRAPH_PROPERTIES = [
@@ -82,6 +86,10 @@ pc.extend(pc, function() {
      * @property {Number} lifetime The length of time in seconds between a particle's birth and its death.
      * @property {Number} stretch A value in world units that controls the amount by which particles are stretched based on their velocity. Particles are stretched from their center towards their previous position.
      * @property {Number} intensity Color multiplier.
+     * @property {Number} animTilesX Number of horizontal tiles in the sprite sheet.
+     * @property {Number} animTilesY Number of vertical tiles in the sprite sheet.
+     * @property {Number} animNumFrames Number of sprite sheet frames to play.
+     * @property {Number} animSpeed Number of sprite sheet frames to play. Sprite sheet animation speed. 1 = particle lifetime, 2 = twice during lifetime etc...
      * @property {Number} depthSoftening Controls fading of particles near their intersections with scene geometry. This effect, when it's non-zero, requires scene depth map to be rendered. Multiple depth-dependent effects can share the same map, but if you only use it for particles, bear in mind that it can double engine draw calls.
      * @property {Number} initialVelocity Defines magnitude of the initial emitter velocity. Direction is given by emitter shape.
      * @property {pc.Vec3} emitterExtents (Only for EMITTERSHAPE_BOX) The extents of a local space bounding box within which particles are spawned at random positions.
@@ -123,6 +131,7 @@ pc.extend(pc, function() {
         this.on("set_mesh", this.onSetMesh, this);
         this.on("set_loop", this.onSetLoop, this);
         this.on("set_blendType", this.onSetBlendType, this);
+        this.on("set_depthSoftening", this.onSetDepthSoftening, this);
 
         SIMPLE_PROPERTIES.forEach(function (prop) {
             this.on('set_' + prop, this.onSetSimpleProperty, this);
@@ -165,7 +174,7 @@ pc.extend(pc, function() {
                     });
                     assets.load(asset);
                 } else {
-                    assets.once("add:" + asset.id, function (asset) {
+                    assets.once("add:" + newValue, function (asset) {
                         asset.on('remove', this.onColorMapRemoved, this);
                         asset.ready(function (asset) {
                             self.colorMap = asset.resource;
@@ -209,7 +218,7 @@ pc.extend(pc, function() {
                     });
                     assets.load(asset);
                 } else {
-                    assets.once("add:" + asset.id, function (asset) {
+                    assets.once("add:" + newValue, function (asset) {
                         asset.on('remove', this.onNormalMapRemoved, this);
                         asset.ready(function (asset) {
                             self.normalMap = asset.resource;
@@ -299,7 +308,7 @@ pc.extend(pc, function() {
         },
 
         _onMeshChanged: function (mesh) {
-            if (mesh) {
+            if (mesh && ! (mesh instanceof pc.Mesh)) {
                 if (mesh.meshInstances[0]) {
                     mesh = mesh.meshInstances[0].mesh;
                 } else {
@@ -337,6 +346,23 @@ pc.extend(pc, function() {
             }
         },
 
+        onSetDepthSoftening: function (name, oldValue, newValue) {
+            if (this.emitter) {
+                if (oldValue!==newValue) {
+                    if (newValue) {
+                        this.emitter[name] = newValue;
+                        if (this.enabled) this.emitter.onEnableDepth();
+                    } else {
+                        if (this.enabled) this.emitter.onDisableDepth();
+                        this.emitter[name] = newValue;
+                    }
+                    this.reset();
+                    this.emitter.resetMaterial();
+                    this.rebuild();
+                }
+            }
+        },
+
         onSetSimpleProperty: function (name, oldValue, newValue) {
             if (this.emitter) {
                 this.emitter[name] = newValue;
@@ -361,9 +387,12 @@ pc.extend(pc, function() {
             }
         },
 
+
         onEnable: function() {
+            var firstRun = false;
             if (!this.emitter && !this.system._inTools) {
 
+                firstRun = true;
                 this.emitter = new pc.ParticleEmitter(this.system.app.graphicsDevice, {
                     numParticles: this.data.numParticles,
                     emitterExtents: this.data.emitterExtents,
@@ -375,6 +404,12 @@ pc.extend(pc, function() {
                     lifetime: this.data.lifetime,
                     rate: this.data.rate,
                     rate2: this.data.rate2,
+
+                    animTilesX: this.data.animTilesX,
+                    animTilesY: this.data.animTilesY,
+                    animNumFrames: this.data.animNumFrames,
+                    animSpeed: this.data.animSpeed,
+                    animLoop: this.data.animLoop,
 
                     startAngle: this.data.startAngle,
                     startAngle2: this.data.startAngle2,
@@ -424,7 +459,7 @@ pc.extend(pc, function() {
                 this.data.model = this.psys;
                 this.emitter.psys = this.psys;
 
-                if (!this.data.loop && !this.data.autoPlay) {
+                if (!this.data.autoPlay) {
                     this.pause();
                 }
             }
@@ -433,19 +468,12 @@ pc.extend(pc, function() {
                 if (!this.system.app.scene.containsModel(this.data.model)) {
                     if (this.emitter.colorMap) {
                         this.system.app.scene.addModel(this.data.model);
+                        if (!firstRun) this.emitter.onEnableDepth();
                     }
                 }
             }
 
-            if (this.data.debugShape) {
-                if (!this.system.app.scene.containsModel(this.data.debugShape)) {
-                    this.system.app.scene.addModel(this.data.debugShape);
-                    this.system.app.root.addChild(this.data.debugShape.graph);
-                }
-            }
-
             ParticleSystemComponent._super.onEnable.call(this);
-
         },
 
         onDisable: function() {
@@ -453,12 +481,8 @@ pc.extend(pc, function() {
             if (this.data.model) {
                 if (this.system.app.scene.containsModel(this.data.model)) {
                     this.system.app.scene.removeModel(this.data.model);
+                    this.emitter.onDisableDepth();
                 }
-            }
-
-            if (this.data.debugShape) {
-                this.system.app.root.removeChild(this.data.debugShape.graph);
-                this.system.app.scene.removeModel(this.data.debugShape);
             }
         },
 

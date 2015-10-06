@@ -14,6 +14,7 @@
 ../src/core/core_debug.js
 ../src/core/core_objectpool.js
 ../src/events/events_events.js
+../src/core/core_tags.js
 ../src/core/core_dom.js
 ../src/math/math_math.js
 ../src/math/math_vec2.js
@@ -71,7 +72,6 @@
 ../src/scene/scene_basicmaterial.js
 ../src/scene/scene_depthmaterial.js
 ../src/scene/scene_phongmaterial.js
-../src/scene/scene_pickmaterial.js
 ../src/scene/scene_mesh.js
 ../src/scene/scene_skin.js
 ../src/scene/scene_skinpartition.js
@@ -100,6 +100,7 @@
 ../src/framework/framework_contentfile.js
 ../src/framework/framework_pack.js
 ../src/framework/framework_application.js
+../src/framework/framework_stats.js
 ../src/framework/components/component_registry.js
 ../src/framework/components/component_system.js
 ../src/framework/components/component_component.js
@@ -155,6 +156,7 @@
 ../src/resources/resources_texture.js
 ../src/resources/resources_html.js
 ../src/resources/resources_css.js
+../src/resources/resources_shader.js
 ../src/resources/resources_scene.js
 ../src/resources/resources_hierarchy.js
 ../src/resources/resources_scenesettings.js

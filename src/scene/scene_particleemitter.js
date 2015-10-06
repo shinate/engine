@@ -152,26 +152,14 @@ pc.extend(pc, function() {
         return colors;
     }
 
-    function createOffscreenTarget(gd, camera) {
-        var rect = camera._rect;
-
-        var width = Math.floor(rect.width * gd.width);
-        var height = Math.floor(rect.height * gd.height);
-
-        var colorBuffer = new pc.Texture(gd, {
-            format: pc.PIXELFORMAT_R8_G8_B8_A8,
-            width: width,
-            height: height
-        });
-
-        colorBuffer.minFilter = pc.FILTER_NEAREST;
-        colorBuffer.magFilter = pc.FILTER_NEAREST;
-        colorBuffer.addressU = pc.ADDRESS_CLAMP_TO_EDGE;
-        colorBuffer.addressV = pc.ADDRESS_CLAMP_TO_EDGE;
-
-        return new pc.RenderTarget(gd, colorBuffer, {
-            depth: true
-        });
+    function syncToCpu(device, targ) {
+        var tex = targ._colorBuffer;
+        var pixels = new Uint8Array(tex.width * tex.height * 4);
+        var gl = device.gl;
+        gl.bindFramebuffer(gl.FRAMEBUFFER, targ._glFrameBuffer);
+        gl.readPixels(0, 0, tex.width, tex.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+        if (!tex._levels) tex._levels = [];
+        tex._levels[0] = pixels;
     }
 
     var ParticleEmitter = function (graphicsDevice, options) {
@@ -240,6 +228,12 @@ pc.extend(pc, function() {
         setProperty("startAngle", 0);
         setProperty("startAngle2", this.startAngle);
 
+        setProperty("animTilesX", 1);
+        setProperty("animTilesY", 1);
+        setProperty("animNumFrames", 1);
+        setProperty("animSpeed", 1);
+        setProperty("animLoop", true);
+
         this.frameRandom = new pc.Vec3(0, 0, 0);
 
         // Time-dependent parameters
@@ -298,6 +292,8 @@ pc.extend(pc, function() {
         this.lightCubeDir[3] = new pc.Vec3(0, 1, 0);
         this.lightCubeDir[4] = new pc.Vec3(0, 0, -1);
         this.lightCubeDir[5] = new pc.Vec3(0, 0, 1);
+
+        this.animParams = new pc.Vec4();
 
         this.internalTex0 = null;
         this.internalTex1 = null;
@@ -399,10 +395,7 @@ pc.extend(pc, function() {
         onChangeCamera: function() {
             if (this.depthSoftening > 0) {
                 if (this.camera) {
-                    if (!this.camera._depthTarget) {
-                        this.camera._depthTarget = createOffscreenTarget(this.graphicsDevice, this.camera);
-                        this._depthTarget = this.camera._depthTarget;
-                    }
+                    this.camera.requestDepthMap();
                 }
             }
             this.regenShader();
@@ -499,6 +492,7 @@ pc.extend(pc, function() {
 
             this.material = new pc.Material();
             this.material.cullMode = pc.CULLFACE_NONE;
+            this.material.alphaWrite = false;
             this.material.blend = true;
 
             // Premultiplied alpha. We can use it for both additive and alpha-transparent blending.
@@ -522,6 +516,12 @@ pc.extend(pc, function() {
             if (this.preWarm) this.prewarm(this.lifetime);
 
             this.resetTime();
+        },
+
+        _isAnimated: function () {
+            return this.animNumFrames >= 1 &&
+                   (this.animTilesX > 1 || this.animTilesY > 1) &&
+                   (this.colorMap && this.colorMap !== defaultParamTex || this.normalMap);
         },
 
         calcSpawnPosition: function(emitterPos, i) {
@@ -609,14 +609,6 @@ pc.extend(pc, function() {
             }
         },
 
-        _hasDepthTarget: function () {
-            if (this.camera) {
-                return !!this.camera._depthTarget;
-            }
-
-            return false;
-        },
-
         regenShader: function() {
             var programLib = this.graphicsDevice.getProgramLibrary();
             var hasNormal = (this.normalMap != null);
@@ -626,19 +618,39 @@ pc.extend(pc, function() {
             }
             // updateShader is also called by pc.Scene when all shaders need to be updated
             this.material.updateShader = function() {
+
+                /* The app works like this:
+                 1. Emitter init
+                 2. Update. No camera is assigned to emitters
+                 3. Render; activeCamera = camera; shader init
+                 4. Update. activeCamera is set to emitters
+                 -----
+                 The problem with 1st frame render is that we init the shader without having any camera set to emitter -
+                 so wrong shader is being compiled.
+                 To fix it, we need to check activeCamera!=emitter.camera in shader init too
+                 */
+                if(this.emitter.scene) {
+                    if(this.emitter.camera != this.emitter.scene._activeCamera) {
+                        this.emitter.camera = this.emitter.scene._activeCamera;
+                        this.emitter.onChangeCamera();
+                    }
+                }
+
                 var shader = programLib.getProgram("particle", {
                     useCpu: this.emitter.useCpu,
                     normal: this.emitter.normalOption,
                     halflambert: this.emitter.halfLambert,
                     stretch: this.emitter.stretch,
                     alignToMotion: this.emitter.alignToMotion,
-                    soft: this.emitter.depthSoftening && this.emitter._hasDepthTarget(),
+                    soft: this.emitter.depthSoftening,
                     mesh: this.emitter.useMesh,
                     gamma: this.emitter.scene ? this.emitter.scene.gammaCorrection : 0,
                     toneMap: this.emitter.scene ? this.emitter.scene.toneMapping : 0,
                     fog: this.emitter.scene ? this.emitter.scene.fog : "none",
                     wrap: this.emitter.wrap && this.emitter.wrapBounds,
-                    blend: this.blendType
+                    blend: this.blendType,
+                    animTex: this.emitter._isAnimated(),
+                    animTexLoop: this.emitter.animLoop
                 });
                 this.setShader(shader);
             };
@@ -650,6 +662,9 @@ pc.extend(pc, function() {
             var gd = this.graphicsDevice;
 
             material.setParameter('stretch', this.stretch);
+            if (this._isAnimated()) {
+                material.setParameter('animTexParams', this.animParams.data);
+            }
             material.setParameter('colorMult', this.intensity);
             if (!this.useCpu) {
                 material.setParameter('internalTex0', this.internalTex0);
@@ -683,9 +698,7 @@ pc.extend(pc, function() {
                     material.setParameter('normalMap', this.normalMap);
                 }
             }
-            if (this.depthSoftening > 0 && this._hasDepthTarget()) {
-                material.setParameter('uDepthMap', this.camera._depthTarget.colorBuffer);
-                material.setParameter('screenSize', new pc.Vec4(gd.width, gd.height, 1.0 / gd.width, 1.0 / gd.height).data);
+            if (this.depthSoftening > 0) {
                 material.setParameter('softening', 1.0 / (this.depthSoftening * this.depthSoftening * 100)); // remap to more perceptually linear
             }
             if (this.stretch > 0.0) material.cull = pc.CULLFACE_NONE;
@@ -832,15 +845,29 @@ pc.extend(pc, function() {
             this.endTime = calcEndTime(this);
         },
 
+        onEnableDepth: function() {
+            if (this.depthSoftening > 0 && this.camera) {
+                this.camera.requestDepthMap();
+            }
+        },
+
+        onDisableDepth: function() {
+            if (this.depthSoftening > 0 && this.camera) {
+                this.camera.releaseDepthMap();
+            }
+        },
+
         addTime: function(delta, isOnStop) {
             var i, j;
             var device = this.graphicsDevice;
 
-            device.setBlending(false);
-            device.setColorWrite(true, true, true, true);
-            device.setCullMode(pc.CULLFACE_NONE);
-            device.setDepthTest(false);
-            device.setDepthWrite(false);
+            if (this._isAnimated()) {
+                var params = this.animParams;
+                params.x = 1.0 / this.animTilesX;
+                params.y = 1.0 / this.animTilesY;
+                params.z = this.animNumFrames * this.animSpeed;
+                params.w = this.animNumFrames - 1;
+            }
 
             // Bake ambient and directional lighting into one ambient cube
             // TODO: only do if lighting changed
@@ -887,6 +914,12 @@ pc.extend(pc, function() {
             this.material.setParameter("emitterScale", emitterScale);
 
             if (!this.useCpu) {
+                device.setBlending(false);
+                device.setColorWrite(true, true, true, true);
+                device.setCullMode(pc.CULLFACE_NONE);
+                device.setDepthTest(false);
+                device.setDepthWrite(false);
+
                 this.frameRandom.x = Math.random();
                 this.frameRandom.y = Math.random();
                 this.frameRandom.z = Math.random();
@@ -943,6 +976,9 @@ pc.extend(pc, function() {
                 this.beenReset = false;
 
                 this.swapTex = !this.swapTex;
+
+                device.setDepthTest(true);
+                device.setDepthWrite(true);
             } else {
                 var data = new Float32Array(this.vertexBuffer.lock());
                 if (this.meshInstance.node) {
@@ -1137,9 +1173,6 @@ pc.extend(pc, function() {
                     }
                 }
             }
-
-            device.setDepthTest(true);
-            device.setDepthWrite(true);
         }
     };
 

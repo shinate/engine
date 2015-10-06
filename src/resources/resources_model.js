@@ -11,6 +11,9 @@ pc.extend(pc, function () {
 
     ModelHandler.DEFAULT_MATERIAL = new pc.PhongMaterial();
 
+    // set default material to physical shading
+    ModelHandler.DEFAULT_MATERIAL.shadingModel = pc.SPECULAR_BLINN;
+
     ModelHandler.prototype = {
         /**
          * @function
@@ -29,7 +32,6 @@ pc.extend(pc, function () {
                     }
                 }
             });
-
         },
 
          /**
@@ -39,70 +41,77 @@ pc.extend(pc, function () {
          * @param {Object} data The data from model file deserialized into a Javascript Object
          */
         open: function (url, data) {
-            var model = null;
+            if (! data.model)
+                return;
+
             if (data.model.version <= 1) {
                 logERROR(pc.string.format("Asset: {0}, is an old model format. Upload source assets to re-import.", url));
             } else if (data.model.version >= 2) {
                 var parser = new pc.JsonModelParser(this._device);
-                model = parser.parse(data);
+                return parser.parse(data);
             }
 
-            return model;
+            return null;
         },
 
         patch: function (asset, assets) {
+            if (! asset.resource)
+                return;
+
             var resource = asset.resource;
             var data = asset.data;
 
             resource.meshInstances.forEach(function (meshInstance, i) {
                 if (data.mapping) {
-                    if (data.mapping[i].material !== undefined) { // id mapping
-                        if (data.mapping[i].material === null) {
+                    var handleMaterial = function(asset) {
+                        if (asset.resource) {
+                            meshInstance.material = asset.resource;
+                        } else {
+                            asset.once('load', handleMaterial);
+                            assets.load(asset);
+                        }
+
+                        asset.once('remove', function(asset) {
+                            if (meshInstance.material === asset.resource)
+                                meshInstance.material = pc.ModelHandler.DEFAULT_MATERIAL;
+                        });
+                    };
+
+                    if (! data.mapping[i]) {
+                        meshInstance.material = pc.ModelHandler.DEFAULT_MATERIAL;
+                        return;
+                    }
+
+                    var id = data.mapping[i].material;
+                    var url = data.mapping[i].path;
+
+                    if (id !== undefined) { // id mapping
+                        if (! id) {
                             meshInstance.material = pc.ModelHandler.DEFAULT_MATERIAL;
                         } else {
-                            var material = assets.get(data.mapping[i].material);
+                            var material = assets.get(id);
                             if (material) {
-                                material.ready(function (asset) {
-                                    meshInstance.material = asset.resource;
-                                });
-                                assets.load(material);
+                                handleMaterial(material);
                             } else {
-                                // wait for asset to be added to registry then try and load it
-                                assets.on("add:" + data.mapping[i].material, function (material) {
-                                    material.ready(function (asset) {
-                                        meshInstance.material = asset.resource;
-                                    });
-                                    assets.load(material);
-                                });
+                                assets.once('add:' + id, handleMaterial);
                             }
                         }
-                    } else if (data.mapping[i].path !== undefined) {
-                        if (data.mapping[i].path) {
-                            // url mapping
-                            var url = asset.getFileUrl();
-                            var dir = pc.path.getDirectory(url);
-                            var path = pc.path.join(dir, data.mapping[i].path);
-                            var material = assets.getByUrl(path);
-                            if (material) {
-                                material.ready(function (asset) {
-                                    meshInstance.material = asset.resource;
-                                });
-                                assets.load(material);
-                            } else {
-                                assets.on("add:url:" + path, function (material) {
-                                    material.ready(function (asset) {
-                                        meshInstance.material = asset.resource;
-                                    });
-                                    assets.load(material);
-                                });
-                            }
+                    } else if (url !== undefined && url) {
+                        // url mapping
+                        var fileUrl = asset.getFileUrl();
+                        var dirUrl = pc.path.getDirectory(fileUrl);
+                        var path = pc.path.join(dirUrl, data.mapping[i].path);
+                        var material = assets.getByUrl(path);
+
+                        if (material) {
+                            handleMaterial(material);
+                        } else {
+                            assets.once('add:url:' + path, handleMaterial);
                         }
                     }
                 }
             });
         },
-
-
     };
 
     return {

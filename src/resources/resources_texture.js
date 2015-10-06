@@ -122,12 +122,20 @@ pc.extend(pc, function () {
                 var FCC_DXT1 = 827611204; // DXT1
                 var FCC_DXT5 = 894720068; // DXT5
                 var FCC_FP32 = 116; // RGBA32f
-                var FCC_ETC1 = 826496069; // ETC1
+
+                // non standard
+                var FCC_ETC1 = 826496069;
+                var FCC_PVRTC_2BPP_RGB_1 = 825438800;
+                var FCC_PVRTC_2BPP_RGBA_1 = 825504336;
+                var FCC_PVRTC_4BPP_RGB_1 = 825439312;
+                var FCC_PVRTC_4BPP_RGBA_1 = 825504848;
 
                 var format = null;
                 var compressed = false;
                 var floating = false;
                 var etc1 = false;
+                var pvrtc2 = false;
+                var pvrtc4 = false;
                 if (isFourCc) {
                     if (fcc===FCC_DXT1) {
                         format = pc.PIXELFORMAT_DXT1;
@@ -142,6 +150,14 @@ pc.extend(pc, function () {
                         format = pc.PIXELFORMAT_ETC1;
                         compressed = true;
                         etc1 = true;
+                    } else if (fcc===FCC_PVRTC_2BPP_RGB_1 || fcc===FCC_PVRTC_2BPP_RGBA_1) {
+                        format = fcc===FCC_PVRTC_2BPP_RGB_1? pc.PIXELFORMAT_PVRTC_2BPP_RGB_1 : pc.PIXELFORMAT_PVRTC_2BPP_RGBA_1;
+                        compressed = true;
+                        pvrtc2 = true;
+                    } else if (fcc===FCC_PVRTC_4BPP_RGB_1 || fcc===FCC_PVRTC_4BPP_RGBA_1) {
+                        format = fcc===FCC_PVRTC_4BPP_RGB_1? pc.PIXELFORMAT_PVRTC_4BPP_RGB_1 : pc.PIXELFORMAT_PVRTC_4BPP_RGBA_1;
+                        compressed = true;
+                        pvrtc4 = true;
                     }
                 } else {
                     if (bpp===32) {
@@ -192,6 +208,10 @@ pc.extend(pc, function () {
                         if (compressed) {
                             if (etc1) {
                                 mipSize = Math.floor((mipWidth + 3) / 4) * Math.floor((mipHeight + 3) / 4) * 8;
+                            } else if (pvrtc2) {
+                                mipSize = Math.max(mipWidth, 16) * Math.max(mipHeight, 8) / 4;
+                            } else if (pvrtc4) {
+                                mipSize = Math.max(mipWidth, 8) * Math.max(mipHeight, 8) / 2;
                             } else {
                                 numBlocksAcross = Math.floor((mipWidth + DXT_BLOCK_WIDTH - 1) / DXT_BLOCK_WIDTH);
                                 numBlocksDown = Math.floor((mipHeight + DXT_BLOCK_HEIGHT - 1) / DXT_BLOCK_HEIGHT);
@@ -221,59 +241,28 @@ pc.extend(pc, function () {
         },
 
         patch: function (asset, assets) {
-            this._updateTexture(asset.resource, asset.data);
+            var texture = asset.resource;
 
-            if (asset.on) {
-                asset.off("change", this._onAssetChanged, this);
-                asset.on("change", this._onAssetChanged, this);
-            }
-        },
+            if (texture.name !== asset.name)
+                texture.name = asset.name;
 
-        _onAssetChanged: function (asset, attribute, value, oldValue) {
-            if (attribute === "data") {
-                this._updateTexture(asset.resource, value);
-            } else if (attribute === 'file') {
-                // reload texture
-                if (oldValue) {
-                    this._loader.clearCache(oldValue.url, 'texture');
-                }
+            if (asset.data.hasOwnProperty('minfilter') && texture.minFilter !== JSON_FILTER_MODE[asset.data.minfilter])
+                texture.minFilter = JSON_FILTER_MODE[asset.data.minfilter];
 
-                if (value) {
-                    // set loaded to false so that the
-                    // asset will be reloaded but do not
-                    // set resource to null so that the 'resource' change handler
-                    // passes the old texture properly
-                    asset.loaded = false;
-                    this._assets.load(asset);
-                } else {
-                    asset.unload();
-                }
-            }
-        },
+            if (asset.data.hasOwnProperty('magfilter') && texture.magFilter !== JSON_FILTER_MODE[asset.data.magfilter])
+                texture.magFilter = JSON_FILTER_MODE[asset.data.magfilter];
 
-        _updateTexture: function (texture, data) {
-            // check if data exists - it might not exist for engine-only users
-            if (data.name !== undefined) {
-                texture.name = data.name;
-            }
-            if (data.addressu !== undefined) {
-                texture.addressU = JSON_ADDRESS_MODE[data.addressu];
-            }
-            if (data.addressV !== undefined) {
-                texture.addressV = JSON_ADDRESS_MODE[data.addressV];
-            }
-            if (data.magfilter !== undefined) {
-                texture.magFilter = JSON_FILTER_MODE[data.magfilter];
-            }
-            if (data.minfilter !== undefined) {
-                texture.minFilter = JSON_FILTER_MODE[data.minfilter];
-            }
-            if (data.anisotropy !== undefined) {
-                texture.anisotropy = data.anisotropy;
-            }
-            if (data.rgbm !== undefined) {
-                texture.rgbm = data.rgbm;
-            }
+            if (asset.data.hasOwnProperty('addressu') && texture.addressU !== JSON_ADDRESS_MODE[asset.data.addressu])
+                texture.addressU = JSON_ADDRESS_MODE[asset.data.addressu];
+
+            if (asset.data.hasOwnProperty('addressv') && texture.addressV !== JSON_ADDRESS_MODE[asset.data.addressv])
+                texture.addressV = JSON_ADDRESS_MODE[asset.data.addressv];
+
+            if (asset.data.hasOwnProperty('anisotropy') && texture.anisotropy !== asset.data.anisotropy)
+                texture.anisotropy = asset.data.anisotropy;
+
+            if (asset.data.hasOwnProperty('rgbm') && texture.rgbm !== !! asset.data.rgbm)
+                texture.rgbm = !! asset.data.rgbm;
         }
     };
 

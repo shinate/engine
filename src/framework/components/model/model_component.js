@@ -22,6 +22,7 @@ pc.extend(pc, function () {
      * @property {Boolean} receiveShadows If true, shadows will be cast on this model
      * @property {Number} materialAsset The material {@link pc.Asset} that will be used to render the model (not used on models of type 'asset')
      * @property {pc.Model} model The model that is added to the scene graph.
+     * @property {Object} mapping A dictionary that holds material overrides for each mesh instance. Only applies to model components of type 'asset'. The mapping contains pairs of mesh instance index - material asset id.
      */
     var ModelComponent = function ModelComponent (system, entity)   {
         this.on("set_type", this.onSetType, this);
@@ -30,6 +31,7 @@ pc.extend(pc, function () {
         this.on("set_model", this.onSetModel, this);
         this.on("set_receiveShadows", this.onSetReceiveShadows, this);
         this.on("set_material", this.onSetMaterial, this);
+        this.on("set_mapping", this.onSetMapping, this);
 
         // override materialAsset property to return a pc.Asset instead
         Object.defineProperty(this, 'materialAsset', {
@@ -37,7 +39,9 @@ pc.extend(pc, function () {
             get: this.getMaterialAsset.bind(this)
         });
 
-        this._onAssetChange = function () {}; // no-op function (don't use null...)
+        this._assetOld = 0;
+
+        this._materialEvents = null;
     };
     ModelComponent = pc.inherits(ModelComponent, pc.Component);
 
@@ -47,82 +51,72 @@ pc.extend(pc, function () {
             this.enabled = visible;
         },
 
-        _setModelAsset: function (id) {
-            var self = this;
-            var assets = this.system.app.assets;
-            var asset = assets.get(id);
+        _onAssetLoad: function(asset) {
+            if (asset.resource)
+                this._onModelLoaded(asset.resource.clone());
+        },
 
-            if (asset) {
-                asset.ready(function (asset) {
-                    var model = asset.resource.clone();
-                    asset.off('change', this._onAssetChange, this); // do not subscribe multiple times
-                    // Create a new function for each model clone
-                    this._onAssetChange = function (asset, attribute, newValue, oldValue) {
-                        if (attribute === 'file') {
-                            // TODO: this is fired twice for every file, once by the messenger
-                            // TODO: this is fired when the mapping changes because it changes the hash
-                            asset.unload();
-                            self.system.app.loader.clearCache(asset.file.url, asset.type);
-                            self._setModelAsset(asset.id);
-                        }
-
-                        if (attribute === 'data') {
-                            // mapping has changed
-                            var a = {
-                                resource: model,
-                                data: asset.data,
-                                type: "model"
-                            };
-                            self.system.app.loader.patch(a, self.system.app.assets);
-                        }
-                    };
-                    asset.on('change', this._onAssetChange, this);
-                    this._onModelLoaded(model);
-                }.bind(this));
-                assets.load(asset);
-            } else {
-                assets.once("add:" + id, function (asset) {
-                    asset.ready(function (asset) {
-                        asset.off('change', this._onAssetChange, this); // do not subscribe multiple times
-
-                        // Create a new function for each model clone
-                        this._onAssetChange = function (asset, attribute, newValue, oldValue) {
-                            if (attribute === 'file') {
-                                // TODO: this is fired twice for every file, once by the messenger
-                                // TODO: this is fired when the mapping changes because it changes the hash
-                                asset.unload(); // mark asset as unloaded
-                                self.system.app.loader.clearCache(asset.file.url, asset.type); // remove existing model from cache
-                                self._setModelAsset(asset.id); // trigger load again
-                            }
-
-                            if (attribute === 'data') {
-                                // mapping has changed
-                                var a = {
-                                    resource: model,
-                                    data: asset.data,
-                                    type: "model"
-                                };
-                                self.system.app.loader.patch(a, self.system.app.assets);
-                            }
-                        };
-                        asset.on('change', this._onAssetChange, this);
-
-                        var model = asset.resource.clone();
-                        this._onModelLoaded(model);
-                    }.bind(this));
-                    assets.load(asset);
-                }, this);
+        _onAssetChange: function(asset, attribute, newValue, oldValue) {
+            if (attribute === 'data') {
+                // reset mapping
+                this.mapping = this.data.mapping;
             }
         },
 
-        _onModelLoaded: function (model) {
-            if (this.system._inTools) {
-                model.generateWireframe();
+        _onAssetRemove: function (asset) {
+            if (this.asset === asset.id)
+                this.asset = null;
+        },
+
+        _setModelAsset: function (id) {
+            var assets = this.system.app.assets;
+            var asset = id !== null ? assets.get(id) : null;
+
+            this._onModelAsset(asset || null);
+
+            if (! asset && id !== null)
+                assets.once("add:" + id, this._onModelAsset, this);
+        },
+
+        _onModelAsset: function(asset) {
+            var assets = this.system.app.assets;
+
+            // clear old assets bindings
+            if (this._assetOld) {
+                assets.off("add:" + this._assetOld, this._onModelAsset, this);
+
+                var assetOld = assets.get(this._assetOld);
+                if (assetOld) {
+                    assetOld.off('load', this._onAssetLoad, this);
+                    assetOld.off('change', this._onAssetChange, this);
+                    assetOld.off('remove', this._onAssetRemove, this);
+                }
             }
 
-            if (this.data.type === 'asset') {
-                this.model = model;
+            // remember new asset id
+            this._assetOld = asset ? asset.id : 0;
+
+            if (asset) {
+                // subscribe to asset events
+                asset.on('load', this._onAssetLoad, this);
+                asset.on('change', this._onAssetChange, this);
+                asset.on('remove', this._onAssetRemove, this);
+
+                if (asset.resource) {
+                    this._onModelLoaded(asset.resource.clone());
+                } else {
+                    assets.load(asset);
+                }
             }
+        },
+
+        remove: function() {
+            this._onModelAsset(null);
+        },
+
+        _onModelLoaded: function (model) {
+            if (this.data.type === 'asset')
+                this.model = model;
         },
 
         /**
@@ -185,29 +179,24 @@ pc.extend(pc, function () {
         },
 
         onSetAsset: function (name, oldValue, newValue) {
-            if (oldValue) {
-                // Remove old listener
-                var asset = this.system.app.assets.get(oldValue);
-                if (asset) {
-                    asset.off('change', this.onAssetChange, this);
-                    asset.off('remove', this.onAssetRemoved, this);
-                }
-            }
-
+            var id = null;
             if (this.data.type === 'asset') {
-                if (newValue) {
+                if (newValue !== null) {
+                    id = newValue;
+
                     if (newValue instanceof pc.Asset) {
                         this.data.asset = newValue.id;
-                        this._setModelAsset(newValue.id);
-                    } else {
-                        this._setModelAsset(newValue);
+                        id = newValue.id;
                     }
                 } else {
                     this.model = null;
                 }
-            } else if (!newValue) {
-                this.data.asset = null;
             }
+
+            if (id === null)
+                this.data.asset = null;
+
+            this._setModelAsset(id);
         },
 
         onSetCastShadows: function (name, oldValue, newValue) {
@@ -258,40 +247,75 @@ pc.extend(pc, function () {
                 if (this.entity.animation) {
                     this.entity.animation.setModel(newValue);
                 }
+
+                // trigger event handler to load mapping
+                // for new model
+                if (this.data.type === 'asset') {
+                    this.mapping = this.data.mapping;
+                } else {
+                    this._unsetMaterialEvents();
+                }
+            } else {
+                this._unsetMaterialEvents();
             }
         },
 
-        setMaterialAsset: function (newValue) {
+        _onMaterialAssetRemove: function(asset) {
+            var assets = this.system.app.assets;
+            var id = isNaN(asset) ? asset.id : asset;
+
+            if (asset && isNaN(asset) && asset.resource === this.material)
+                this.material = pc.ModelHandler.DEFAULT_MATERIAL;
+
+            assets.off('add:' + id, this._onMaterialAsset, this);
+            assets.off('load:' + id, this._onMaterialAsset, this);
+            assets.off('remove:' + id, this._onMaterialAssetRemove, this);
+        },
+
+        _onMaterialAsset: function(asset) {
+            var assets = this.system.app.assets;
+
+            if (asset.resource) {
+                this.material = asset.resource;
+            } else {
+                assets.load(asset);
+            }
+        },
+
+        setMaterialAsset: function (value) {
             // if the type of the value is not a number assume it is an pc.Asset
-            var id = typeof newValue === 'number' || !newValue ? newValue : newValue.id;
+            var id = typeof value === 'number' || !value ? value : value.id;
 
             // var material;
             var assets = this.system.app.assets;
             var self = this;
 
+            // unsubscribe
+            if (this.data.materialAsset !== id) {
+                if (this.data.materialAsset)
+                    this._onMaterialAssetRemove(this.data.materialAsset);
+
+                if (id) {
+                    assets.on('load:' + id, this._onMaterialAsset, this);
+                    assets.once('remove:' + id, this._onMaterialAssetRemove, this);
+                }
+            }
+
             // try to load the material asset
             if (id !== undefined && id !== null) {
                 var asset = assets.get(id);
-                if (asset) {
-                    asset.ready(function (asset) {
-                        self.material = asset.resource;
-                    });
-                    assets.load(asset);
-                } else {
-                    assets.on("add:"+id, function (asset) {
-                        asset.ready(function (asset) {
-                            self.material = asset.resource;
-                        });
-                        assets.load(asset);
-                    });
-                }
+                if (asset)
+                    this._onMaterialAsset(asset);
+
+                // subscribe for adds
+                assets.once('add:' + id, this._onMaterialAsset, this);
             } else if (id === null) {
                 self.material = pc.ModelHandler.DEFAULT_MATERIAL;
             }
 
-            var oldValue = this.data.materialAsset;
+            var valueOld = this.data.materialAsset;
             this.data.materialAsset = id;
-            this.fire('set', 'materialAsset', oldValue, id);
+            this.fire('set', 'materialAsset', valueOld, id);
         },
 
         getMaterialAsset: function () {
@@ -308,6 +332,129 @@ pc.extend(pc, function () {
                     }
                 }
             }
+        },
+
+        onSetMapping: function (name, oldValue, newValue) {
+            if (this.data.type !== 'asset' || !this.data.model) {
+                return;
+            }
+
+            // unsubscribe from old events
+            if (oldValue) {
+                this._unsetMaterialEvents();
+            }
+
+            if (! newValue) {
+                newValue = {};
+            }
+
+            var meshInstances = this.data.model.meshInstances;
+            var modelAsset = this.asset ? this.system.app.assets.get(this.asset) : null;
+            var assetMapping = modelAsset ? modelAsset.data.mapping : null;
+
+            for (var i = 0, len = meshInstances.length; i < len; i++) {
+                if (newValue[i] !== undefined) {
+                    if (newValue[i]) {
+                        this._loadAndSetMeshInstanceMaterial(newValue[i], meshInstances[i], i);
+                    } else {
+                        meshInstances[i].material = pc.ModelHandler.DEFAULT_MATERIAL;
+                    }
+                } else if (assetMapping) {
+                    if (assetMapping[i] && (assetMapping[i].material || assetMapping[i].path)) {
+                        var idOrPath = assetMapping[i].material || assetMapping[i].path;
+                        this._loadAndSetMeshInstanceMaterial(idOrPath, meshInstances[i], i);
+                    } else {
+                        meshInstances[i].material = pc.ModelHandler.DEFAULT_MATERIAL;
+                    }
+                }
+            }
+        },
+
+        _setMaterialEvent: function (index, event, id, handler) {
+            var evt = event + ':' + id;
+            this.system.app.assets.on(evt, handler, this);
+
+            if (!this._materialEvents) this._materialEvents = [];
+
+            if (!this._materialEvents[index]) this._materialEvents[index] = {};
+
+            this._materialEvents[index][evt] = {
+                id: id,
+                handler: handler
+            };
+        },
+
+        _unsetMaterialEvents: function () {
+            var assets = this.system.app.assets;
+            var events = this._materialEvents;
+            if (! events)
+                return;
+
+            for (var i = 0, len = events.length; i < len; i++) {
+                if (! events[i]) continue;
+                var evt = events[i];
+                for (var key in evt) {
+                    assets.off(key, evt[key].handler, this);
+                }
+            }
+
+            this._materialEvents = null;
+        },
+
+        _loadAndSetMeshInstanceMaterial: function (idOrPath, meshInstance, index) {
+            var self = this;
+            var asset;
+            var assets = this.system.app.assets;
+
+            var isPath = isNaN(parseInt(idOrPath, 10));
+
+            // get asset by id or url
+            if (!isPath) {
+                asset = assets.get(idOrPath);
+            } else if (self.asset) {
+                var url = self._getMaterialAssetUrl(idOrPath);
+                if (!url) return;
+
+                asset = assets.getByUrl(url);
+            }
+
+            var handleMaterial = function (asset) {
+                if (asset.resource) {
+                    meshInstance.material = asset.resource;
+
+                    self._setMaterialEvent(index, 'remove', asset.id, function () {
+                        meshInstance.material = pc.ModelHandler.DEFAULT_MATERIAL;
+                    });
+                } else {
+                    self._setMaterialEvent(index, 'load', asset.id, function (asset) {
+                        meshInstance.material = asset.resource;
+
+                        self._setMaterialEvent(index, 'remove', asset.id, function () {
+                            meshInstance.material = pc.ModelHandler.DEFAULT_MATERIAL;
+                        });
+                    });
+
+                    assets.load(asset);
+                }
+            };
+
+            if (asset) {
+                handleMaterial(asset);
+            } else {
+                meshInstance.material = pc.ModelHandler.DEFAULT_MATERIAL;
+                self._setMaterialEvent(index, isPath ? 'add:url' : 'add', idOrPath, handleMaterial);
+            }
+        },
+
+        _getMaterialAssetUrl: function (path) {
+            if (!this.asset) return null;
+
+            var modelAsset = this.system.app.assets.get(this.asset);
+            if (!modelAsset) return null;
+
+            var fileUrl = modelAsset.getFileUrl();
+            var dirUrl = pc.path.getDirectory(fileUrl);
+            return pc.path.join(dirUrl, path);
         },
 
         onSetReceiveShadows: function (name, oldValue, newValue) {
@@ -343,13 +490,6 @@ pc.extend(pc, function () {
                 if (inScene) {
                     this.system.app.scene.removeModel(model);
                 }
-            }
-        },
-
-        onAssetRemoved: function (asset) {
-            asset.off('remove', this.onAssetRemoved, this);
-            if (this.asset === asset.id) {
-                this.asset = null;
             }
         }
     });

@@ -43,7 +43,11 @@
          * fragment and write the result to the frame buffer.
          */
         BLEND_MULTIPLICATIVE: 5,
-
+        /**
+         * @enum pc.BLEND
+         * @name pc.BLEND_ADDITIVEALPHA
+         * @description Same as pc.BLEND_ADDITIVE except the source RGB is multiplied by the source alpha.
+         */
         BLEND_ADDITIVEALPHA: 6,
 
         /**
@@ -198,11 +202,6 @@ pc.extend(pc, function () {
         this.shadowCasters = []; // All mesh instances that cast shadows
         this.immediateDrawCalls = []; // Only for this frame
 
-        // Statistics
-        this.depthDrawCalls = 0;
-        this.shadowDrawCalls = 0;
-        this.forwardDrawCalls = 0;
-
         this.fog = pc.FOG_NONE;
         this.fogColor = new pc.Color(0, 0, 0);
         this.fogStart = 1;
@@ -228,6 +227,10 @@ pc.extend(pc, function () {
         this._skyboxIntensity = 1;
         this._skyboxMip = 0;
 
+        this._stats = {
+            meshInstances: 0,
+            lights: 0
+        };
 
         // Models
         this._models = [];
@@ -378,7 +381,6 @@ pc.extend(pc, function () {
         var al = settings.render.global_ambient;
         this.ambientLight = new pc.Color(al[0], al[1], al[2]);
 
-
         this.fog = settings.render.fog;
 
         var fogColor = settings.render.fog_color;
@@ -392,8 +394,6 @@ pc.extend(pc, function () {
         this.exposure = settings.render.exposure;
         this.skyboxIntensity = settings.render.skyboxIntensity===undefined? 1 : settings.render.skyboxIntensity;
         this.skyboxMip = settings.render.skyboxMip===undefined? 0 : settings.render.skyboxMip;
-
-        this.skyboxAsset = settings.render.skybox;
     };
 
     // Shaders have to be updated if:
@@ -422,9 +422,8 @@ pc.extend(pc, function () {
             } else {
                 var mip2tex = [null, "64", "16", "8", "4"];
                 var mipTex = this["skyboxPrefiltered" + mip2tex[scene._skyboxMip]];
-                if (mipTex) {
+                if (mipTex)
                     material.setParameter("texture_cubeMap", mipTex);
-                }
             }
             material.cull = pc.CULLFACE_NONE;
 
@@ -469,6 +468,12 @@ pc.extend(pc, function () {
         return this._models;
     };
 
+    Scene.prototype._updateStats = function () {
+        var stats = this._stats;
+        stats.meshInstances = this.drawCalls.length;
+        stats.lights = this._lights.length;
+    };
+
     /**
      * @function
      * @name pc.Scene#addModel
@@ -508,6 +513,7 @@ pc.extend(pc, function () {
             for (i = 0, len = lights.length; i < len; i++) {
                 this.addLight(lights[i]);
             }
+            this._updateStats();
         }
     };
 
@@ -552,6 +558,7 @@ pc.extend(pc, function () {
             for (i = 0, len = lights.length; i < len; i++) {
                 this.removeLight(lights[i]);
             }
+            this._updateStats();
         }
     };
 
@@ -568,6 +575,7 @@ pc.extend(pc, function () {
             light._scene = this;
             this.updateShaders = true;
         }
+        this._updateStats();
     };
 
     Scene.prototype.removeLight = function (light) {
@@ -579,18 +587,7 @@ pc.extend(pc, function () {
             light._scene = null;
             this.updateShaders = true;
         }
-    };
-
-    Scene.prototype.attachSkyboxAsset = function (asset) {
-        var scene = this;
-
-        this.setSkybox(asset.resources);
-
-        asset.off('change', this._onSkyBoxChanged, this);
-        asset.on('change', this._onSkyBoxChanged, this);
-
-        asset.off('remove', this._onSkyBoxRemoved, this);
-        asset.on('remove', this._onSkyBoxRemoved, this);
+        this._updateStats();
     };
 
     Scene.prototype._resetSkyboxModel = function () {
@@ -600,26 +597,6 @@ pc.extend(pc, function () {
             }
         }
         this._skyboxModel = null;
-    };
-
-    Scene.prototype._onSkyBoxChanged = function (asset, attribute, newValue, oldValue) {
-        if (attribute !== 'resources') {
-            return;
-        }
-
-        if (oldValue && oldValue[0] === this.skybox) {
-            this.setSkybox(newValue);
-        } else {
-            asset.off('change', this._onSkyBoxChanged, this);
-            asset.off('remove', this._onSkyBoxRemoved, this);
-        }
-    };
-
-    Scene.prototype._onSkyBoxRemoved = function (asset) {
-        asset.off('change', this._onSkyBoxChanged, this);
-        if (this.skybox === asset.resources[0]) {
-            this.setSkybox(null);
-        }
     };
 
     Scene.prototype.setSkybox = function (cubemaps) {

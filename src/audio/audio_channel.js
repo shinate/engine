@@ -13,6 +13,7 @@ pc.extend(pc, function () {
         * @param {pc.Sound} sound The sound to playback
         * @param {Object} options
         * @param {Number} [options.volume=1] The playback volume, between 0 and 1.
+        * @param {Number} [options.pitch=1] The relative pitch, default of 1, plays at normal pitch.
         * @param {Boolean} [options.loop=false] Whether the sound should loop when it reaches the end or not.
         */
         Channel = function (manager, sound, options) {
@@ -147,6 +148,7 @@ pc.extend(pc, function () {
              * @description Set the volume of playback between 0 and 1.
              */
             setVolume: function (volume) {
+                volume = pc.math.clamp(volume, 0, 1);
                 this.volume = volume;
                 if (this.gain) {
                     this.gain.gain.value = volume * this.manager.getVolume();
@@ -251,6 +253,7 @@ pc.extend(pc, function () {
             },
 
             setVolume: function (volume) {
+                volume = pc.math.clamp(volume, 0, 1);
                 this.volume = volume;
                 if (this.source) {
                     this.source.volume = volume * this.manager.getVolume();

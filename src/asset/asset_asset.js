@@ -14,7 +14,8 @@ pc.extend(pc, function () {
     * See the {@link pc.AssetRegistry} for details on loading resources from assets.
     * @property {String} name The name of the asset
     * @property {Number} id The asset id
-    * @property {String} type The type of the asset. One of ["animation", "audio", "image", "json", "material", "model", "text", "texture", "cubemap", "html", "css"]
+    * @property {String} type The type of the asset. One of ["animation", "audio", "image", "json", "material", "model", "text", "texture", "cubemap", "html", "css", "shader"]
+    * @property {pc.Tags} tags Interface for tagging
     * @property {Object} file The file details or null if no file
     * @property {String} [file.url] The URL of the resource file that contains the asset data
     * @property {String} [file.filename] The filename of the resource file
@@ -47,6 +48,7 @@ pc.extend(pc, function () {
 
         this.name = arguments[0];
         this.type = arguments[1];
+        this.tags = new pc.Tags(this);
         this.preload = false;
 
         this._file = arguments[2] ? {
@@ -64,6 +66,7 @@ pc.extend(pc, function () {
 
         // is resource loaded
         this.loaded = false;
+        this.loading = false;
 
         pc.events.attach(this);
     };
@@ -99,12 +102,14 @@ pc.extend(pc, function () {
         * });
         * app.assets.load(asset);
         */
-        ready: function (callback) {
+        ready: function (callback, scope) {
+            scope = scope || this;
+
             if (this.resource) {
-                callback(this);
+                callback.call(scope, this);
             } else {
                 this.once("load", function (asset) {
-                    callback(asset);
+                    callback.call(scope, asset);
                 });
             }
         },
@@ -132,9 +137,8 @@ pc.extend(pc, function () {
 
         set: function (value) {
             this._id = value;
-            if (value > assetIdCounter) {
+            if (value > assetIdCounter)
                 assetIdCounter = value;
-            }
         }
     });
 
@@ -149,11 +153,18 @@ pc.extend(pc, function () {
             var old = this._file;
             this._file = value;
             // check if we set a new file or if the hash has changed
-            if (value && !old ||
-                !value && old ||
-                value && old && value.hash !== old.hash) {
-
+            if (! value || ! old || (value && old && value.hash !== old.hash)) {
                 this.fire('change', this, 'file', value, old);
+
+                // trigger reloading
+                if (this.loaded) {
+                    if (this.type === 'cubemap') {
+                        this.registry._loader.patch(this, this.registry);
+                    } else {
+                        this.loaded = false;
+                        this.registry.load(this);
+                    }
+                }
             }
         }
     });
@@ -170,6 +181,9 @@ pc.extend(pc, function () {
             this._data = value;
             if (value !== old) {
                 this.fire('change', this, 'data', value, old);
+
+                if (this.loaded)
+                    this.registry._loader.patch(this, this.registry);
             }
         }
     });

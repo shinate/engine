@@ -53,6 +53,7 @@ pc.extend(pc, function () {
         this.context = this;
 
         this.graphicsDevice = new pc.GraphicsDevice(canvas);
+        this.stats = new pc.ApplicationStats(this.graphicsDevice);
         this.systems = new pc.ComponentSystemRegistry();
         this._audioManager = new pc.AudioManager();
         this.loader = new pc.ResourceLoader();
@@ -69,8 +70,9 @@ pc.extend(pc, function () {
 
         this._inTools = false;
 
+        this._skyboxLast = 0;
+
         this._scriptPrefix = options.scriptPrefix || '';
-        // this._scripts = [];
 
         this.loader.addHandler("animation", new pc.AnimationHandler());
         this.loader.addHandler("model", new pc.ModelHandler(this.graphicsDevice));
@@ -84,6 +86,7 @@ pc.extend(pc, function () {
         this.loader.addHandler("cubemap", new pc.CubemapHandler(this.graphicsDevice, this.assets, this.loader));
         this.loader.addHandler("html", new pc.HtmlHandler());
         this.loader.addHandler("css", new pc.CssHandler());
+        this.loader.addHandler("shader", new pc.ShaderHandler());
         this.loader.addHandler("hierarchy", new pc.HierarchyHandler(this));
         this.loader.addHandler("scenesettings", new pc.SceneSettingsHandler(this));
 
@@ -146,7 +149,7 @@ pc.extend(pc, function () {
     Application.prototype = {
         /**
         * @name pc.Application#configure
-        * @description Load a configuration file from
+        * @description Load the application configuration file
         */
         configure: function (url, callback) {
             var self = this;
@@ -313,7 +316,7 @@ pc.extend(pc, function () {
         loadSceneSettings: function (url, callback) {
             this.loader.load(url, "scenesettings", function (err, settings) {
                 if (!err) {
-                    this.updateSceneSettings(settings);
+                    this.applySceneSettings(settings);
                     if (callback) {
                         callback(null);
                     }
@@ -406,9 +409,8 @@ pc.extend(pc, function () {
                     }
 
                     this.loader.load(scriptUrl, "script", function (err, ScriptType) {
-                        if (err) {
+                        if (err)
                             console.error(err);
-                        }
 
                         progress.inc();
                         if (progress.done()) {
@@ -466,6 +468,9 @@ pc.extend(pc, function () {
                 var asset = new pc.Asset(data['name'], data['type'], data['file'], data['data']);
                 asset.id = parseInt(id);
                 asset.preload = data.preload ? data.preload : false;
+                // tags
+                asset.tags.add(data['tags']);
+                // registry
                 this.assets.add(asset);
             }
         },
@@ -512,7 +517,10 @@ pc.extend(pc, function () {
          * @description Start the Application updating
          */
         start: function () {
-            this.fire("start");
+            this.fire("start", {
+                timestamp: pc.now(),
+                target: this
+            });
 
             if (!this.scene) {
                 this.scene = new pc.Scene();
@@ -537,6 +545,8 @@ pc.extend(pc, function () {
          * @param {Number} dt The time delta since the last frame.
          */
         update: function (dt) {
+            this.stats.frame.updateStart = pc.now();
+
             // Perform ComponentSystem update
             pc.ComponentSystem.fixedUpdate(1.0 / 60.0, this._inTools);
             pc.ComponentSystem.update(dt, this._inTools);
@@ -557,6 +567,8 @@ pc.extend(pc, function () {
             if (this.gamepads) {
                 this.gamepads.update(dt);
             }
+
+            this.stats.frame.updateTime = pc.now() - this.stats.frame.updateStart;
         },
 
         /**
@@ -565,7 +577,10 @@ pc.extend(pc, function () {
          * @description Application specific render method. Override this if you have a custom Application
          */
         render: function () {
+            this.stats.frame.renderStart = pc.now();
+
             if (!this.scene) {
+                this.stats.frame.renderTime = 0;
                 return;
             }
 
@@ -584,6 +599,65 @@ pc.extend(pc, function () {
                 renderer.render(this.scene, camera.camera);
                 camera.frameEnd();
             }
+
+            this.stats.frame.renderTime = pc.now() - this.stats.frame.renderStart;
+        },
+
+        _fillFrameStats: function(now, dt, ms) {
+            // Timing stats
+            var stats = this.stats.frame;
+            stats.dt = dt;
+            stats.ms = ms;
+            if (now > stats._timeToCountFrames) {
+                stats.fps = stats._fpsAccum;
+                stats._fpsAccum = 0;
+                stats._timeToCountFrames = now + 1000;
+            } else {
+                stats._fpsAccum++;
+            }
+
+            // Render stats
+            stats.cameras = this.renderer._camerasRendered;
+            stats.materials = this.renderer._materialSwitches;
+            stats.shaders = this.graphicsDevice._shaderSwitchesPerFrame;
+            stats.shadowMapUpdates = this.renderer._shadowMapUpdates;
+            var prims = this.graphicsDevice._primsPerFrame;
+            stats.triangles = prims[pc.PRIMITIVE_TRIANGLES]/3 +
+                Math.max(prims[pc.PRIMITIVE_TRISTRIP]-2, 0) +
+                Math.max(prims[pc.PRIMITIVE_TRIFAN]-2, 0);
+            stats.cullTime = this.renderer._cullTime;
+            stats.otherPrimitives = 0;
+            for(var i=0; i<prims.length; i++) {
+                if (i<pc.PRIMITIVE_TRIANGLES) {
+                    stats.otherPrimitives += prims[i];
+                }
+                prims[i] = 0;
+            }
+            this.renderer._camerasRendered = 0;
+            this.renderer._materialSwitches = 0;
+            this.renderer._shadowMapUpdates = 0;
+            this.graphicsDevice._shaderSwitchesPerFrame = 0;
+            this.renderer._cullTime = 0;
+
+            // Draw call stats
+            stats = this.stats.drawCalls;
+            stats.forward = this.renderer._forwardDrawCalls;
+            stats.depth = this.renderer._depthDrawCalls;
+            stats.shadow = this.renderer._shadowDrawCalls;
+            stats.skinned = this.renderer._skinDrawCalls;
+            stats.immediate = this.renderer._immediateRendered;
+            stats.instanced = this.renderer._instancedDrawCalls;
+            stats.removedByInstancing = this.renderer._removedByInstancing;
+            stats.total = this.graphicsDevice._drawCallsPerFrame;
+            stats.misc = stats.total - (stats.forward + stats.depth + stats.shadow);
+            this.renderer._depthDrawCalls = 0;
+            this.renderer._shadowDrawCalls = 0;
+            this.renderer._forwardDrawCalls = 0;
+            this.renderer._skinDrawCalls = 0;
+            this.renderer._immediateRendered = 0;
+            this.renderer._instancedDrawCalls = 0;
+            this.renderer._removedByInstancing = 0;
+            this.graphicsDevice._drawCallsPerFrame = 0;
         },
 
         /**
@@ -602,13 +676,21 @@ pc.extend(pc, function () {
             // Submit a request to queue up a new animation frame immediately
             window.requestAnimationFrame(this.tick.bind(this));
 
-            var now = (window.performance && window.performance.now) ? performance.now() : Date.now();
-            var dt = (now - (this._time || now)) / 1000.0;
+            var now = pc.now();
+            var ms = now - (this._time || now);
+            var dt = ms / 1000.0;
 
             this._time = now;
 
             dt = pc.math.clamp(dt, 0, 0.1); // Maximum delta is 0.1s or 10 fps.
             dt *= this.timeScale;
+
+            this._fillFrameStats(now, dt, ms);
+
+            this.fire("frameEnd", {
+                timestamp: now,
+                target: this
+            });
 
             this.update(dt);
             this.render();
@@ -818,62 +900,65 @@ pc.extend(pc, function () {
             this.systems.collision.onLibraryLoaded();
         },
 
-        updateSceneSettings: function (settings) {
-            var self = this;
-
-            if (self.systems.rigidbody && typeof Ammo !== 'undefined') {
+        applySceneSettings: function (settings) {
+            if (this.systems.rigidbody && typeof Ammo !== 'undefined') {
                 var gravity = settings.physics.gravity;
-                self.systems.rigidbody.setGravity(gravity[0], gravity[1], gravity[2]);
+                this.systems.rigidbody.setGravity(gravity[0], gravity[1], gravity[2]);
             }
 
-            if (!self.scene) {
+            if (! this.scene)
                 return;
-            }
 
-            var ambient = settings.render.global_ambient;
-            self.scene.ambientLight.set(ambient[0], ambient[1], ambient[2]);
+            this.scene.applySettings(settings);
 
-            self.scene.fog = settings.render.fog;
-            self.scene.fogStart = settings.render.fog_start;
-            self.scene.fogEnd = settings.render.fog_end;
-
-            var fog = settings.render.fog_color;
-            self.scene.fogColor = new pc.Color(fog[0], fog[1], fog[2]);
-            self.scene.fogDensity = settings.render.fog_density;
-
-            self.scene.gammaCorrection = settings.render.gamma_correction;
-            self.scene.toneMapping = settings.render.tonemapping;
-            self.scene.exposure = settings.render.exposure;
-            self.scene.skyboxIntensity = settings.render.skyboxIntensity===undefined? 1 : settings.render.skyboxIntensity;
-            self.scene.skyboxMip = settings.render.skyboxMip===undefined? 0 : settings.render.skyboxMip;
-
-            if (settings.render.skybox) {
-                var asset = self.assets.get(settings.render.skybox);
-                if (asset) {
-                    // if there is prefiltered data and the skybox is not set to use mip 0 (full-res),
-                    // then we don't have to load the 6 faces textures.
-                    if (asset.data.skipFaces !== false) {
-                        asset.data.skipFaces = (asset.file && self.scene.skyboxMip !== 0);
-                        if (asset.data.skipFaces === false) {
-                            asset.loaded = false;
-                        }
-                    }
-
-                    asset.ready(function (asset) {
-                        self.scene.attachSkyboxAsset(asset);
-                    });
-                    self.assets.load(asset);
-                } else {
-                    self.assets.once("add:" + settings.render.skybox, function (asset) {
-                        asset.ready(function (asset) {
-                            self.scene.attachSkyboxAsset(asset);
-                        });
-                        self.assets.load(asset);
-                    });
+            if (settings.render.skybox && this._skyboxLast !== settings.render.skybox) {
+                // unsubscribe of old skybox
+                if (this._skyboxLast) {
+                    this.assets.off('add:' + this._skyboxLast, this._onSkyboxAdd, this);
+                    this.assets.off('load:' + this._skyboxLast, this._onSkyBoxLoad, this);
+                    this.assets.off('remove:' + this._skyboxLast, this._onSkyboxRemove, this);
                 }
-            } else {
-                self.scene.setSkybox(null);
+                this._skyboxLast = settings.render.skybox;
+
+                var asset = this.assets.get(settings.render.skybox);
+
+                this.assets.on('load:' + settings.render.skybox, this._onSkyBoxLoad, this);
+                this.assets.once('remove:' + settings.render.skybox, this._onSkyboxRemove, this);
+
+                if (! asset)
+                    this.assets.once('add:' + settings.render.skybox, this._onSkyboxAdd, this);
+
+                if (asset) {
+                    if (asset.resource)
+                        this.scene.setSkybox(asset.resources);
+
+                    this._onSkyboxAdd(asset);
+                }
+            } else if (! settings.render.skybox) {
+                this._onSkyboxRemove({ id: this._skyboxLast });
+            } else if (this.scene.skyboxMip === 0 && settings.render.skybox) {
+                var asset = this.assets.get(settings.render.skybox);
+                if (asset)
+                    this._onSkyboxAdd(asset);
             }
+        },
+
+        _onSkyboxAdd: function(asset) {
+            if (this.scene.skyboxMip === 0)
+                asset.loadFaces = true;
+
+            this.assets.load(asset);
+        },
+
+        _onSkyBoxLoad: function(asset) {
+            this.scene.setSkybox(asset.resources);
+        },
+
+        _onSkyboxRemove: function(asset) {
+            this.assets.off('add:' + asset.id, this._onSkyboxAdd, this);
+            this.assets.off('load:' + asset.id, this._onSkyBoxLoad, this);
+            this.scene.setSkybox(null);
+            this._skyboxLast = null;
         },
 
         /**

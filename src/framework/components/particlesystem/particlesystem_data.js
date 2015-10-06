@@ -31,6 +31,12 @@ pc.extend(pc, function() {
                                                 // Leave undefined to use simple quads
         this.depthWrite = false;
 
+        this.animTilesX = 1;
+        this.animTilesY = 1;
+        this.animNumFrames = 1;
+        this.animSpeed = 1;
+        this.animLoop = true;
+
         // Time-dependent parameters
         this.scaleGraph = null;
         this.scaleGraph2 = null;
@@ -57,9 +63,6 @@ pc.extend(pc, function() {
         this.enabled = true;
 
         this.paused = false;
-
-        this.debugShape = null;
-
     };
     ParticleSystemComponentData = pc.inherits(ParticleSystemComponentData, pc.ComponentData);
 
